@@ -20,6 +20,7 @@ export class CanvasRenderer {
   private canvasElement: HTMLCanvasElement; // Element płótna (canvas), na którym rysowane są sprite'y
   private context: CanvasRenderingContext2D; // Kontekst 2D płótna
   private spritesMap: Map<string, Sprite> = new Map(); // Mapa sprite'ów przechowująca wszystkie sprite'y z przypisanym identyfikatorem
+  private rafId: number | null = null; // Identyfikator requestAnimationFrame
 
   constructor(stream: MediaStream, video: HTMLVideoElement, canvas: HTMLCanvasElement) {
     this.canvasElement = canvas;
@@ -39,7 +40,7 @@ export class CanvasRenderer {
     this.context.setTransform(-1, 0, 0, 1, this.canvasElement.width, 0);
     this.context.drawImage(this.videoElement, 0, 0, this.videoElement.width, this.videoElement.height);
     this.drawSprites();
-    requestAnimationFrame(this.renderCanvas.bind(this)); // Ciągłe renderowanie płótna
+    this.rafId = requestAnimationFrame(this.renderCanvas.bind(this)); // Ciągłe renderowanie płótna
   }
 
   // Ustawienie rozdzielczości wideo i płótna
@@ -119,6 +120,14 @@ export class CanvasRenderer {
   hasSprite(id: string): boolean {
     return this.spritesMap.has(id);
   }
+
+  // Zatrzymanie renderowania płótna
+  stopRendering() {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+  }
 }
 
 /*
@@ -127,4 +136,5 @@ export class CanvasRenderer {
   - Umożliwia dodawanie, przesuwanie, usuwanie sprite'ów oraz sprawdzanie kolizji między nimi.
   - Metoda renderCanvas() ciągle renderuje obraz z kamery oraz sprite'y, tworząc płynny efekt wizualny.
   - Klasa obsługuje zarządzanie rozdzielczością płótna, co jest istotne dla dopasowania obrazu do różnych ekranów.
+  - Dodano metodę stopRendering(), aby umożliwić zatrzymanie ciągłego renderowania płótna, co pomaga w lepszym zarządzaniu zasobami.
 */

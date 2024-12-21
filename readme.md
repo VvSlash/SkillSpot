@@ -65,7 +65,7 @@ npm start
 yarn start
 ```
 
-Aplikacja powinna otworzyć się w przeglądarce pod adresem `http://localhost:3000`.
+Aplikacja powinna otworzyć się w przeglądarce pod adresem `http://localhost:8100/`.
 
 ## Funkcjonalności
 

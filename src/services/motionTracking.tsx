@@ -49,7 +49,7 @@ export class PoseDetectionContainer {
 
       const detectionModel = SupportedModels.MoveNet;
       const moveNetMultiConfig: MoveNetModelConfig = {
-        modelType: movenet.modelType.MULTIPOSE_LIGHTNING,
+        modelType: movenet.modelType.SINGLEPOSE_LIGHTNING,
       };
 
       console.log('Creating MoveNet detector...');
@@ -136,6 +136,12 @@ export class PoseDetectionContainer {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
+    }
+
+    // Stop the video stream
+    if (this.videoElement.srcObject) {
+      const stream = this.videoElement.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
     }
   }
 }

@@ -14,5 +14,8 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/setupTests.ts',
-  }
+  },
+  worker: {
+    format: 'es', // Ensure worker is built using ES modules
+  },
 })

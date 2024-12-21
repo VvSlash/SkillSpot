@@ -1,10 +1,11 @@
 import './ExploreContainer.css';
 
-import React from 'react';
+import React, { ReactNode } from 'react';
 import { IonContent } from '@ionic/react';
 
 interface ExploreContainerProps {
   name: string;
+  children: ReactNode;
 }
 
 const ExploreContainer: React.FC<ExploreContainerProps> = ({ name, children }) => {

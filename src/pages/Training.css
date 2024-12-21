@@ -1,43 +1,26 @@
 /* src/pages/Training.css */
-
 .training-container {
-  position: relative;
-  width: 100%;
-  height: 100vh; /* Pełna wysokość */
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  overflow: hidden;
-}
-
-.camera-preview {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-}
-
-.overlay-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 2;
-}
-
-.training-controls {
-  position: absolute;
-  top: 60px;
-  left: 10px;
-  z-index: 10;
-  color: white;
-  text-shadow: 0 0 5px rgba(0, 0, 0, 0.7);
-}
-
-.training-controls p {
-  margin: 0;
-  padding: 5px;
-  background: rgba(0, 0, 0, 0.5);
-  border-radius: 5px;
-}
+    position: relative;
+    width: 100%;
+    height: 100vh; /* Full height */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  
+  .training-controls {
+    position: absolute;
+    top: 60px;
+    left: 10px;
+    z-index: 10;
+    color: white;
+    text-shadow: 0 0 5px rgba(0, 0, 0, 0.7);
+  }
+  
+  .training-controls p {
+    margin: 0;
+    padding: 5px;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 5px;
+  }
+  
