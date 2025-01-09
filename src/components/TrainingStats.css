@@ -1,0 +1,18 @@
+.training-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.stats-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.stats-row div {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+} 

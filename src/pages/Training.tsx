@@ -1,335 +1,699 @@
 /*
   Plik: /src/pages/Training.tsx
-  Opis:
-  Komponent Training jest stroną odpowiedzialną za wyświetlanie głównego ekranu treningowego, w którym użytkownik ma możliwość przeprowadzenia ćwiczeń opartych na wizualnych wskazówkach. Komponent ten integruje funkcjonalności związane z śledzeniem ruchu, wyświetlaniem punktów oraz pomiarem czasu reakcji.
+  Opis: Komponent Training jest stroną odpowiedzialną za wyświetlanie głównego ekranu treningowego.
+  
+  Zmiany:
+  - Dodano licznik czasu treningu
+  - Zmodyfikowano obsługę pauzy
+  - Dodano inicjalizację kamery i detekcji pozy podczas odliczania
+  - Dodano obsługę czasu dla treningu proceduralnego i map ręcznych
 */
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  IonPage,
-  IonHeader,
-  IonToolbar,
-  IonTitle,
   IonContent,
+  IonHeader,
+  IonPage,
+  IonTitle,
+  IonToolbar,
   IonButton,
+  IonIcon,
+  IonButtons,
+  IonModal,
+  IonFooter,
+  useIonRouter,
 } from '@ionic/react';
+import { play, pause, settings, stop } from 'ionicons/icons';
+import { CanvasRenderer } from '../components/CanvasRenderer';
+import TrainingConfigurator from '../components/TrainingConfigurator';
+import TrainingInfo from '../components/TrainingInfo';
+import CountdownTimer from '../components/CountdownTimer';
+import { CompleteTrainingConfig, TrainingAdjustments } from '../types/training';
+import { TrainingConfig, captureCamera } from '../utils';
 import { PoseDetectionContainer } from '../services/motionTracking';
-import { captureCamera } from '../utils';
+import type { Keypoint } from '../types/motion';
+import { predefinedTrainings } from '../config/predefinedTrainings';
+import { defaultAdjustments } from '../config/defaultAdjustments';
+import { TrainingStats, TrainingStatsRef } from '../components/TrainingStats';
 import './Training.css';
-import { throttle } from 'lodash';
-import { useHistory } from 'react-router-dom';
 
-// Komponent Training
-const Training: React.FC = () => {
-  // Referencje do elementów video i canvas
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const poseDetectionRef = useRef<any | null>(null);
-  const animationFrameIdRef = useRef<number | null>(null);
+enum TrainingState {
+  IDLE,        // przed rozpoczęciem
+  PREPARING,   // kamera i detekcja aktywne, odliczanie
+  ACTIVE,      // trening w toku
+  PAUSED,      // wstrzymany przez przycisk
+  CONFIGURING  // wstrzymany przez modal
+}
 
-  // Stany komponentu
-  const [isTraining, setIsTraining] = useState(false);
-  const [hitCount, setHitCount] = useState(0);
-  const [totalCues, setTotalCues] = useState(0);
-  const [reactionTimes, setReactionTimes] = useState<number[]>([]);
+class TrainingManager {
+  private canvasRenderer: CanvasRenderer | null = null;
+  private poseDetection: PoseDetectionContainer | null = null;
+  private stream: MediaStream | null = null;
+  private video: HTMLVideoElement | null = null;
+  private canvas: HTMLCanvasElement | null = null;
+  private config: CompleteTrainingConfig | null = null;
+  private onHitCallback: ((keypointId: string) => void) | null = null;
+  private onNewTargetsCallback: ((targetIds: string[]) => void) | null = null;
+  private state: TrainingState = TrainingState.IDLE;
+  
+  // Nowy system zarządzania czasem
+  private timeSegments: { start: number; end: number; }[] = [];
+  private currentSegmentStart: number | null = null;
+  private modalOpenTime: number | null = null;
 
-  const cueAppearTimeRef = useRef<number | null>(null);
-  const targetsRef = useRef<
-    Array<{ x: number; y: number; color: string; keypoint: string }>
-  >([]);
-  const history = useHistory();
-
-  const latestKeypointsRef = useRef<any[]>([]);
-
-  // Funkcja obsługująca rozpoczęcie treningu
-  const startTraining = async () => {
-    setIsTraining(true);
-    setHitCount(0);
-    setTotalCues(0);
-    setReactionTimes([]);
-    targetsRef.current = [];
-
-    const stream = await captureCamera();
-    if (canvasRef.current && videoRef.current) {
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-
-      poseDetectionRef.current = new PoseDetectionContainer(
-        videoRef.current,
-        handlePoseDetection
-      );
-
-      adjustCanvasToVideo();
-      startAnimationLoop();
-      generateTargets();
-    }
-  };
-
-  // Funkcja obsługująca zatrzymanie treningu
-  const stopTraining = () => {
-    setIsTraining(false);
-
-    // Czyszczenie celów
-    targetsRef.current = [];
-
-    // Obliczanie statystyk
-    const accuracy = totalCues > 0 ? (hitCount / totalCues) * 100 : 0;
-    const averageReactionTime =
-      reactionTimes.length > 0
-        ? reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length
-        : 0;
-
-    const sessionData = {
-      hitCount: hitCount || 0,
-      totalCues: totalCues || 0,
-      accuracy: accuracy || 0,
-      averageReactionTime: averageReactionTime || 0,
+  constructor() {
+    this.config = {
+      selectedTraining: predefinedTrainings[0],
+      adjustments: defaultAdjustments as TrainingAdjustments
     };
+  }
 
-    // Bezpieczne zapisywanie w localStorage
-    const sessions = JSON.parse(localStorage.getItem('sessions') || '[]');
-    localStorage.setItem('sessions', JSON.stringify([...sessions, sessionData]));
+  // Inicjalizacja systemu
+  async initialize(
+    video: HTMLVideoElement,
+    canvas: HTMLCanvasElement,
+    onHit: (keypointId: string) => void,
+    onNewTargets: (targetIds: string[]) => void
+  ): Promise<void> {
+    this.video = video;
+    this.canvas = canvas;
+    this.onHitCallback = onHit;
+    this.onNewTargetsCallback = onNewTargets;
 
-    // Nawigacja do ekranu podsumowania
-    history.push('/summary');
-
-    // Zatrzymanie strumienia wideo
-    if (poseDetectionRef.current) {
-      poseDetectionRef.current.stopDetection();
-      poseDetectionRef.current = null;
-    }
-
-    if (videoRef.current) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream?.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-    }
-
-    stopAnimationLoop();
-  };
-
-  const adjustCanvasToVideo = () => {
-    if (!canvasRef.current || !videoRef.current) return;
-
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-
-    const videoWidth = video.videoWidth || 640;
-    const videoHeight = video.videoHeight || 480;
-
-    const headerHeight =
-      (document.querySelector('ion-header') as HTMLElement)?.offsetHeight || 0;
-    const controlsHeight =
-      (document.querySelector('.training-controls') as HTMLElement)
-        ?.offsetHeight || 0;
-    const availableHeight = window.innerHeight - headerHeight - controlsHeight;
-
-    const videoAspectRatio = videoWidth / videoHeight;
-    const screenAspectRatio = window.innerWidth / availableHeight;
-
-    let canvasWidth, canvasHeight;
-
-    if (screenAspectRatio > videoAspectRatio) {
-      canvasHeight = availableHeight;
-      canvasWidth = canvasHeight * videoAspectRatio;
-    } else {
-      canvasWidth = window.innerWidth;
-      canvasHeight = canvasWidth / videoAspectRatio;
-    }
-
-    canvas.width = videoWidth;
-    canvas.height = videoHeight;
-
-    canvas.style.width = `${canvasWidth}px`;
-    canvas.style.height = `${canvasHeight}px`;
-
-    video.style.width = `${canvasWidth}px`;
-    video.style.height = `${canvasHeight}px`;
-    video.style.transform = 'scaleX(-1)'; // Lustrzane odbicie
-    video.style.display = 'none'; // Ukrycie elementu video
-  };
-
-  const generateTargets = () => {
-    const margin = 30;
-    const canvasWidth = canvasRef.current?.width || 0;
-    const canvasHeight = canvasRef.current?.height || 0;
-
-    const colors = ['red', 'blue', 'green', 'yellow'];
-    const keypoints = ['leftWrist', 'rightWrist', 'leftAnkle', 'rightAnkle'];
-
-    targetsRef.current = keypoints.map((keypoint, i) => ({
-      x: Math.random() * (canvasWidth - margin * 2) + margin,
-      y: Math.random() * (canvasHeight - margin * 2) + margin,
-      color: colors[i],
-      keypoint,
-    }));
-
-    cueAppearTimeRef.current = Date.now();
-    setTotalCues((prev) => prev + targetsRef.current.length);
-  };
-
-  const handlePoseDetection = throttle((poses: any[]) => {
-    if (!poses.length) return;
-
-    const keypoints = poses[0].keypoints;
-    const trackedKeypoints = [
-      { id: 'leftWrist', x: keypoints[9]?.x, y: keypoints[9]?.y, color: 'red' },
-      {
-        id: 'rightWrist',
-        x: keypoints[10]?.x,
-        y: keypoints[10]?.y,
-        color: 'blue',
-      },
-      {
-        id: 'leftAnkle',
-        x: keypoints[15]?.x,
-        y: keypoints[15]?.y,
-        color: 'green',
-      },
-      {
-        id: 'rightAnkle',
-        x: keypoints[16]?.x,
-        y: keypoints[16]?.y,
-        color: 'yellow',
-      },
-    ];
-
-    // Lustrzane odbicie współrzędnych x
-    const canvasWidth = canvasRef.current?.width || 0;
-    trackedKeypoints.forEach((kp) => {
-      if (kp.x != null) {
-        kp.x = canvasWidth - kp.x;
+    try {
+      // Zatrzymaj poprzedni strumień
+      if (this.stream) {
+        this.stream.getTracks().forEach(track => track.stop());
       }
-    });
 
-    checkForHits(trackedKeypoints);
-    latestKeypointsRef.current = trackedKeypoints;
-  });
+      // Inicjalizacja kamery
+      this.stream = await captureCamera();
+      this.video.srcObject = this.stream;
 
-  const drawCanvas = () => {
-    if (!canvasRef.current || !videoRef.current) return;
-    const canvas = canvasRef.current;
-    const context = canvas.getContext('2d');
-    const video = videoRef.current;
-    if (!context) return;
-
-    const drawFrame = () => {
-      animationFrameIdRef.current = requestAnimationFrame(drawFrame);
-
-      context.save();
-      // Lustrzane odbicie
-      context.scale(-1, 1);
-      context.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
-      context.restore();
-
-      drawKeypointsAndTargets(context);
-    };
-
-    drawFrame();
-  };
-
-  const drawKeypointsAndTargets = (context: CanvasRenderingContext2D) => {
-    // Rysowanie kluczowych punktów
-    const keypoints = latestKeypointsRef.current;
-    if (keypoints) {
-      keypoints.forEach(({ x, y, color }: any) => {
-        if (x != null && y != null) {
-          context.fillStyle = color;
-          context.beginPath();
-          context.arc(x, y, 10, 0, Math.PI * 2);
-          context.fill();
-        }
-      });
-    }
-
-    // Rysowanie celów
-    targetsRef.current.forEach(({ x, y, color }) => {
-      context.fillStyle = color;
-      context.fillRect(x, y, 30, 30);
-    });
-  };
-
-  const checkForHits = (keypoints: any[]) => {
-    setHitCount((prev) => {
-      let newHitCount = prev;
-      targetsRef.current.forEach((target, index) => {
-        const correspondingKeypoint = keypoints.find(
-          (kp) => kp.id === target.keypoint
-        );
-        if (
-          correspondingKeypoint &&
-          Math.hypot(
-            correspondingKeypoint.x - target.x,
-            correspondingKeypoint.y - target.y
-          ) < 20
-        ) {
-          newHitCount++;
-          targetsRef.current[index] = {
-            ...target,
-            x: Math.random() * (canvasRef.current!.width - 30),
-            y: Math.random() * (canvasRef.current!.height - 30),
-          };
-
-          if (cueAppearTimeRef.current) {
-            setReactionTimes((prevTimes) => [
-              ...prevTimes,
-              Date.now() - cueAppearTimeRef.current!,
-            ]);
-            cueAppearTimeRef.current = Date.now();
+      // Inicjalizacja detekcji pozy
+      this.poseDetection = new PoseDetectionContainer(
+        this.video,
+        (keypoints: Keypoint[]) => {
+          if (this.canvasRenderer) {
+            this.canvasRenderer.updateKeypoints(keypoints);
           }
         }
-      });
-      return newHitCount;
-    });
-  };
+      );
 
-  const startAnimationLoop = () => {
-    drawCanvas();
-  };
+      // Konfiguracja renderera
+      const headerHeight = (document.querySelector('ion-header') as HTMLElement)?.offsetHeight || 0;
+      const footerHeight = (document.querySelector('ion-footer') as HTMLElement)?.offsetHeight || 0;
 
-  const stopAnimationLoop = () => {
-    if (animationFrameIdRef.current) {
-      cancelAnimationFrame(animationFrameIdRef.current);
-      animationFrameIdRef.current = null;
+      if (this.config) {
+        const trainingConfig: Partial<TrainingConfig> = {
+          ...this.config.selectedTraining.config,
+          ...this.config.adjustments,
+        };
+
+        this.canvasRenderer = new CanvasRenderer(
+          this.stream,
+          this.video,
+          this.canvas,
+          this.onHitCallback,
+          trainingConfig,
+          this.onNewTargetsCallback
+        );
+
+        this.canvasRenderer.adjustCanvasToVideo(headerHeight, footerHeight);
+      }
+
+      // Rozpocznij renderowanie i detekcję
+      if (this.canvasRenderer && this.poseDetection) {
+        this.canvasRenderer.startRendering();
+        this.poseDetection.startDetection();
+      }
+      this.state = TrainingState.PREPARING;
+    } catch (error) {
+      console.error('Błąd podczas inicjalizacji treningu:', error);
+      this.cleanup();
+      throw error;
+    }
+  }
+
+  // Rozpoczęcie właściwego treningu
+  startTraining(): void {
+    if (this.state === TrainingState.PREPARING) {
+      this.state = TrainingState.ACTIVE;
+      this.currentSegmentStart = Date.now();
+      this.timeSegments = [];
+      if (this.canvasRenderer) {
+        this.canvasRenderer.startGeneratingTargets();
+      }
+    }
+  }
+
+  // Wstrzymanie treningu (przycisk)
+  pauseTraining(): void {
+    if (this.state === TrainingState.ACTIVE) {
+      this.state = TrainingState.PAUSED;
+      if (this.currentSegmentStart) {
+        this.timeSegments.push({
+          start: this.currentSegmentStart,
+          end: Date.now()
+        });
+        this.currentSegmentStart = null;
+      }
+      if (this.canvasRenderer) {
+        this.canvasRenderer.pauseTraining();
+      }
+    }
+  }
+
+  // Wstrzymanie treningu (modal)
+  pauseForConfig(): void {
+    if (this.state === TrainingState.ACTIVE || this.state === TrainingState.PAUSED) {
+      const wasNormalPaused = this.state === TrainingState.PAUSED;
+      
+      // Jeśli trening był aktywny, zapisz segment czasu
+      if (!wasNormalPaused && this.currentSegmentStart) {
+        this.timeSegments.push({
+          start: this.currentSegmentStart,
+          end: Date.now()
+        });
+        this.currentSegmentStart = null;
+      }
+
+      this.state = TrainingState.CONFIGURING;
+      this.modalOpenTime = Date.now();
+      
+      if (this.canvasRenderer) {
+        this.canvasRenderer.pauseForConfig();
+      }
+    }
+  }
+
+  // Wznowienie treningu
+  resumeTraining(): void {
+    const wasConfiguring = this.state === TrainingState.CONFIGURING;
+    
+    if (this.state === TrainingState.PAUSED || this.state === TrainingState.CONFIGURING) {
+      this.state = TrainingState.ACTIVE;
+      this.currentSegmentStart = Date.now();
+      this.modalOpenTime = null;
+
+      if (this.canvasRenderer) {
+        this.canvasRenderer.resumeTraining();
+        if (wasConfiguring) {
+          this.canvasRenderer.startGeneratingTargets();
+        }
+      }
+    }
+  }
+
+  // Pobranie aktualnego czasu treningu
+  getCurrentTime(): number {
+    // Oblicz sumę wszystkich zakończonych segmentów
+    const completedTime = this.timeSegments.reduce(
+      (total, segment) => total + (segment.end - segment.start),
+      0
+    );
+
+    // Dodaj czas aktualnego segmentu, jeśli istnieje
+    const currentSegmentTime = this.currentSegmentStart 
+      ? Date.now() - this.currentSegmentStart 
+      : 0;
+
+    return completedTime + currentSegmentTime;
+  }
+
+  // Sprawdzenie czy trening jest aktywny
+  isActive(): boolean {
+    return this.state === TrainingState.ACTIVE;
+  }
+
+  // Sprawdzenie czy trening jest wstrzymany
+  isPaused(): boolean {
+    return this.state === TrainingState.PAUSED || this.state === TrainingState.CONFIGURING;
+  }
+
+  // Pobranie aktualnego stanu
+  getState(): TrainingState {
+    return this.state;
+  }
+
+  // Zakończenie treningu
+  cleanup(): void {
+    this.state = TrainingState.IDLE;
+    this.currentSegmentStart = null;
+    this.modalOpenTime = null;
+    this.timeSegments = [];
+
+    if (this.canvasRenderer) {
+      this.canvasRenderer.cleanup();
+      this.canvasRenderer = null;
+    }
+
+    if (this.poseDetection) {
+      this.poseDetection.stopDetection();
+      this.poseDetection = null;
+    }
+
+    if (this.video) {
+      this.video.srcObject = null;
+    }
+
+    if (this.stream) {
+      this.stream.getTracks().forEach(track => track.stop());
+      this.stream = null;
+    }
+  }
+
+  // Aktualizacja konfiguracji
+  updateConfig(config: CompleteTrainingConfig): void {
+    this.config = config;
+    if (this.canvasRenderer && this.onHitCallback && this.onNewTargetsCallback) {
+      const trainingConfig: Partial<TrainingConfig> = {
+        ...config.selectedTraining.config,
+        ...config.adjustments,
+      };
+      const headerHeight = (document.querySelector('ion-header') as HTMLElement)?.offsetHeight || 0;
+      const footerHeight = (document.querySelector('ion-footer') as HTMLElement)?.offsetHeight || 0;
+
+      if (this.stream && this.video && this.canvas) {
+        this.canvasRenderer.stopRendering();
+        this.canvasRenderer.stopGeneratingTargets();
+        this.canvasRenderer = new CanvasRenderer(
+          this.stream,
+          this.video,
+          this.canvas,
+          this.onHitCallback,
+          trainingConfig,
+          this.onNewTargetsCallback
+        );
+        this.canvasRenderer.adjustCanvasToVideo(headerHeight, footerHeight);
+        this.canvasRenderer.startRendering();
+        if (this.isActive() && !this.isPaused()) {
+          this.canvasRenderer.startGeneratingTargets();
+        }
+      }
+    }
+  }
+
+  // Dostosowanie rozmiaru canvasu
+  adjustCanvasSize(headerHeight: number, footerHeight: number): void {
+    this.canvasRenderer?.adjustCanvasToVideo(headerHeight, footerHeight);
+  }
+}
+
+const Training: React.FC = () => {
+  const router = useIonRouter();
+  const [isTraining, setIsTraining] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isCountingDown, setIsCountingDown] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [trainingConfig, setTrainingConfig] = useState<CompleteTrainingConfig>({
+    selectedTraining: predefinedTrainings[0],
+    adjustments: defaultAdjustments as TrainingAdjustments
+  });
+  
+  const statsRef = useRef<TrainingStatsRef>(null);
+  const cueAppearTimeRef = useRef<number | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const trainingManagerRef = useRef<TrainingManager>(new TrainingManager());
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const timerDisplayRef = useRef<HTMLDivElement>(null);
+  const elapsedTimeRef = useRef<number>(0);
+
+  // Obsługa rozpoczęcia treningu
+  const handleTrainingStart = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+
+    try {
+      await trainingManagerRef.current.initialize(
+        videoRef.current,
+        canvasRef.current,
+        handleHit,
+        handleNewTargets
+      );
+      
+      setIsTraining(true);
+      setIsCountingDown(true);
+    } catch (error) {
+      console.error('Nie udało się rozpocząć treningu:', error);
     }
   };
+
+  // Obsługa zakończenia odliczania
+  const handleCountdownComplete = () => {
+    setIsCountingDown(false);
+    
+    if (trainingManagerRef.current.getState() === TrainingState.PREPARING) {
+      // Rozpocznij nowy trening
+      trainingManagerRef.current.startTraining();
+    } else {
+      // Wznów trening po pauzie
+      trainingManagerRef.current.resumeTraining();
+    }
+    
+    setIsPaused(false);
+    startTimeTracking();
+  };
+
+  // Rozpoczęcie śledzenia czasu - zoptymalizowane
+  const startTimeTracking = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    
+    timerRef.current = setInterval(() => {
+      elapsedTimeRef.current = trainingManagerRef.current.getCurrentTime();
+      
+      // Aktualizuj tylko wyświetlanie czasu bez re-renderowania całego komponentu
+      if (timerDisplayRef.current) {
+        timerDisplayRef.current.textContent = `${Math.floor(elapsedTimeRef.current / 1000)}s`;
+      }
+    }, 1000);
+  };
+
+  // Obsługa pauzy/wznowienia
+  const handlePauseResume = () => {
+    if (!isPaused) {
+      // Pauzujemy trening
+      trainingManagerRef.current.pauseTraining();
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      setIsPaused(true);
+    } else {
+      // Rozpoczynamy odliczanie przed wznowieniem
+      setIsCountingDown(true);
+      setIsPaused(false);
+    }
+  };
+
+  // Obsługa otwarcia/zamknięcia konfiguracji
+  const handleConfigModal = (show: boolean) => {
+    if (show && isTraining) {
+      trainingManagerRef.current.pauseForConfig();
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      setIsPaused(true);
+    }
+    setShowConfig(show);
+  };
+
+  // Obsługa zamknięcia modalu
+  const handleModalDismiss = () => {
+    setShowConfig(false);
+    if (isTraining) {
+      setIsCountingDown(true);
+    }
+  };
+
+  // Obsługa zakończenia treningu - zmodyfikowana
+  const handleTrainingEnd = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    // Zapisz sesję w localStorage
+    const sessions = JSON.parse(localStorage.getItem('sessions') || '[]');
+    sessions.push({
+      trainingId: trainingConfig?.selectedTraining.id,
+      ...statsRef.current?.getStats(),
+      trainingTime: elapsedTimeRef.current,
+      timestamp: Date.now(),
+    });
+    localStorage.setItem('sessions', JSON.stringify(sessions));
+
+    // Cleanup
+    trainingManagerRef.current.cleanup();
+    statsRef.current?.reset();
+    setIsTraining(false);
+    setIsPaused(false);
+
+    router.push('/summary');
+  };
+
+  // Zoptymalizowany ResizeObserver
+  const resizeObserver = new ResizeObserver(
+    // Throttle callback do 60fps
+    (() => {
+      let ticking = false;
+      return (entries: ResizeObserverEntry[]) => {
+        if (!ticking) {
+          window.requestAnimationFrame(() => {
+            const headerHeight = (document.querySelector('ion-header') as HTMLElement)?.offsetHeight || 0;
+            const footerHeight = (document.querySelector('ion-footer') as HTMLElement)?.offsetHeight || 0;
+            trainingManagerRef.current.adjustCanvasSize(headerHeight, footerHeight);
+            ticking = false;
+          });
+          ticking = true;
+        }
+      };
+    })()
+  );
+
+  // Obsługa trafień - zoptymalizowana
+  const handleHit = (() => {
+    let lastHitTime = 0;
+    let hits = 0;
+    const MIN_HIT_INTERVAL = 16; // ~60fps
+
+    return (keypointId: string) => {
+      const now = Date.now();
+      if (now - lastHitTime < MIN_HIT_INTERVAL) return;
+      lastHitTime = now;
+
+      hits++;
+      statsRef.current?.updateHits(hits);
+      
+      if (cueAppearTimeRef.current !== null) {
+        const reactionTime = now - cueAppearTimeRef.current;
+        statsRef.current?.updateReactionTime(reactionTime);
+        cueAppearTimeRef.current = null;
+      }
+    };
+  })();
+
+  // Obsługa nowych celów - zoptymalizowana
+  const handleNewTargets = (() => {
+    let lastTargetTime = 0;
+    let totalCues = 0;
+    const MIN_TARGET_INTERVAL = 16; // ~60fps
+
+    return (targetIds: string[]) => {
+      const now = Date.now();
+      if (now - lastTargetTime < MIN_TARGET_INTERVAL) return;
+      lastTargetTime = now;
+
+      totalCues += targetIds.length;
+      statsRef.current?.updateCues(totalCues);
+      cueAppearTimeRef.current = now;
+    };
+  })();
+
+  // Obsługa zmiany konfiguracji - zoptymalizowana
+  const handleConfigChange = (() => {
+    let lastConfigTime = 0;
+    const MIN_CONFIG_INTERVAL = 100; // Throttle do 10 aktualizacji/s
+
+    return (config: CompleteTrainingConfig) => {
+      const now = Date.now();
+      if (now - lastConfigTime < MIN_CONFIG_INTERVAL) return;
+      lastConfigTime = now;
+
+      setTrainingConfig(config);
+      trainingManagerRef.current.updateConfig(config);
+    };
+  })();
+
+  // Pobierz najlepszy wynik - zoptymalizowany
+  const getBestScore = (() => {
+    const cache = new Map<string, any>();
+    const CACHE_TTL = 5000; // 5s cache
+
+    return (trainingId: string) => {
+      const now = Date.now();
+      const cached = cache.get(trainingId);
+      if (cached && now - cached.timestamp < CACHE_TTL) {
+        return cached.score;
+      }
+
+      const sessions = JSON.parse(localStorage.getItem('sessions') || '[]');
+      const trainingScores = sessions.filter((s: any) => s.trainingId === trainingId);
+      
+      if (trainingScores.length === 0) {
+        cache.set(trainingId, { score: null, timestamp: now });
+        return null;
+      }
+
+      const bestScore = trainingScores.reduce((best: any, current: any) => {
+        if (!best || current.accuracy > best.accuracy) {
+          return {
+            accuracy: current.accuracy,
+            averageReactionTime: current.averageReactionTime,
+            timestamp: current.timestamp,
+            trainingTime: current.trainingTime
+          };
+        }
+        return best;
+      }, null);
+
+      cache.set(trainingId, { score: bestScore, timestamp: now });
+      return bestScore;
+    };
+  })();
+
+  const bestScore = trainingConfig ? getBestScore(trainingConfig.selectedTraining.id) : null;
+
+  // Obsługa wyboru treningu
+  const handleTrainingSelect = (trainingId: string) => {
+    const stored = localStorage.getItem('customTrainings');
+    const customTrainings = stored ? JSON.parse(stored) : [];
+    const allTrainings = [...predefinedTrainings, ...customTrainings];
+
+    const foundTraining = allTrainings.find(t => t.id === trainingId);
+    if (foundTraining) {
+      const mergedAdjustments = {
+        ...defaultAdjustments,
+        ...foundTraining.config, 
+      };
+
+      handleConfigChange({
+        selectedTraining: foundTraining,
+        adjustments: mergedAdjustments
+      });
+    } else {
+      console.warn("Trening o podanym ID nie istnieje w allTrainings:", trainingId);
+    }
+  };
+
+  // Podłącz ResizeObserver do kontenera
+  if (containerRef.current) {
+    resizeObserver.observe(containerRef.current);
+  }
 
   return (
     <IonPage>
       <IonHeader>
         <IonToolbar>
-          <IonTitle>Training Mode</IonTitle>
+          <IonTitle>Trening</IonTitle>
+          <IonButtons slot="end">
+            <IonButton onClick={() => handleConfigModal(true)}>
+              <IonIcon slot="icon-only" icon={settings} />
+            </IonButton>
+          </IonButtons>
         </IonToolbar>
       </IonHeader>
+
       <IonContent fullscreen>
-        <div className="training-container">
-          <video ref={videoRef} style={{ display: 'none' }} />
-          <canvas ref={canvasRef}></canvas>
-        </div>
-        <div className="training-controls">
-          {!isTraining ? (
-            <IonButton expand="block" onClick={startTraining}>
-              Start
-            </IonButton>
-          ) : (
-            <IonButton expand="block" color="danger" onClick={stopTraining}>
-              Stop
-            </IonButton>
+        <div className="training-container" ref={containerRef}>
+          {!isTraining && trainingConfig && (
+            <TrainingInfo 
+              config={trainingConfig}
+              onTrainingSelect={handleTrainingSelect}
+            />
           )}
-          <p>Hits: {hitCount}</p>
-          <p>Total Cues: {totalCues}</p>
+          
+          <div className="camera-container">
+            <video
+              ref={videoRef}
+              className="camera-feed"
+              style={{ display: isTraining || isCountingDown ? 'block' : 'none' }}
+              playsInline
+              autoPlay
+              muted
+            />
+            
+            <canvas 
+              id="training-canvas" 
+              ref={canvasRef}
+              className="training-canvas"
+              style={{ display: isTraining ? 'block' : 'none' }}
+            />
+
+            {isCountingDown && (
+              <CountdownTimer
+                duration={5}
+                onComplete={handleCountdownComplete}
+              />
+            )}
+          </div>
         </div>
       </IonContent>
+
+      <IonFooter>
+        <IonToolbar>
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            padding: '0 10px' 
+          }}>
+            <div style={{ flex: 2 }}>
+              {isTraining ? (
+                <>
+                  <TrainingStats ref={statsRef} />
+                  <div ref={timerDisplayRef}>0s</div>
+                </>
+              ) : bestScore ? (
+                <>
+                  <div>Najlepszy wynik:</div>
+                  <div>Dokładność: {bestScore.accuracy.toFixed(1)}%</div>
+                  <div>Czas: {Math.floor(bestScore.trainingTime / 1000)}s</div>
+                  <div>Średni czas: {(bestScore.averageReactionTime / 1000).toFixed(2)}s</div>
+                </>
+              ) : (
+                <div>Brak wyników</div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {isTraining ? (
+                <>
+                  <IonButton
+                    onClick={handlePauseResume}
+                    color={isPaused ? "success" : "warning"}
+                  >
+                    <IonIcon slot="icon-only" icon={isPaused ? play : pause} />
+                  </IonButton>
+                  <IonButton
+                    onClick={handleTrainingEnd}
+                    color="danger"
+                  >
+                    <IonIcon slot="icon-only" icon={stop} />
+                  </IonButton>
+                </>
+              ) : (
+                <IonButton
+                  onClick={() => {
+                    setIsTraining(true);
+                    handleTrainingStart();
+                  }}
+                  color="success"
+                  disabled={!trainingConfig}
+                >
+                  <IonIcon slot="icon-only" icon={play} />
+                </IonButton>
+              )}
+            </div>
+          </div>
+        </IonToolbar>
+      </IonFooter>
+
+      <IonModal
+        isOpen={showConfig}
+        onDidDismiss={handleModalDismiss}
+        breakpoints={[0, 0.5, 0.75, 1]}
+        initialBreakpoint={0.75}
+        className="config-modal"
+      >
+        <TrainingConfigurator 
+          onConfigChange={handleConfigChange}
+          initialConfig={trainingConfig || undefined}
+          onTrainingSelect={handleTrainingSelect}
+        />
+      </IonModal>
     </IonPage>
   );
 };
 
 export default Training;
-
-/*
-  Podsumowanie:
-  - Komponent Training wyświetla ekran treningowy.
-  - Wykorzystuje serwis motionTracking do śledzenia ruchu użytkownika.
-  - Generuje początkowe wizualne punkty do zbicia za pomocą funkcji generateTargets.
-  - Używa IonPage z Ionic React do strukturyzacji strony.
-*/

@@ -1,0 +1,113 @@
+.training-info-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+}
+
+.training-swiper {
+  width: 100%;
+  height: 100%;
+}
+
+.swiper-slide {
+  padding: 0 20px;
+  box-sizing: border-box;
+}
+
+.training-slide {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  border-radius: 16px;
+}
+
+.training-slide-background {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-size: cover;
+  background-position: top center;
+  filter: brightness(0.7);
+  transition: all 0.3s ease-in-out;
+  border-radius: 16px;
+}
+
+.training-slide-content {
+  margin: 0;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 16px;
+  overflow-y: auto;
+  position: relative;
+  z-index: 2;
+  padding: 20px;
+}
+
+.training-title {
+  font-size: 2rem;
+  margin-bottom: 1rem;
+  color: #ffffff;
+}
+
+.training-description {
+  font-size: 1.2rem;
+  margin-bottom: 2rem;
+  color: #ffffff;
+  opacity: 0.9;
+}
+
+.training-section {
+  margin-top: 1.5rem;
+  color: #ffffff;
+}
+
+.section-title {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  color: #ffffff;
+}
+
+.keypoints-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.keypoints-list li {
+  margin-bottom: 0.5rem;
+  font-size: 1.1rem;
+  opacity: 0.9;
+}
+
+.best-score-section {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #ffffff;
+}
+
+/* Dostosowanie stylów paginacji Swiper */
+:root {
+  --swiper-theme-color: #ffffff;
+  --swiper-pagination-bullet-size: 10px;
+  --swiper-pagination-bullet-inactive-color: rgba(255, 255, 255, 0.5);
+  --swiper-pagination-bullet-inactive-opacity: 1;
+}
+
+.swiper-pagination {
+  bottom: 20px !important;
+}
+
+.swiper-pagination-bullet {
+  background: var(--swiper-pagination-bullet-inactive-color);
+  opacity: var(--swiper-pagination-bullet-inactive-opacity);
+}
+
+.swiper-pagination-bullet-active {
+  background: var(--swiper-theme-color);
+} 

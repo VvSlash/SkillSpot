@@ -1,0 +1,189 @@
+.countdown-overlay {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.countdown-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  padding: 2rem;
+}
+
+.countdown-number {
+  font-size: 12rem;
+  font-weight: bold;
+  color: #ffffff;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+  animation: pulse-fade 1s ease-in-out infinite;
+}
+
+.countdown-text {
+  position: absolute;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 1.8rem;
+  color: #ffffff;
+  text-align: center;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1rem 2rem;
+  border-radius: 1rem;
+  white-space: nowrap;
+}
+
+@keyframes pulse-fade {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.training-area {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80%;
+  height: 80%;
+  max-width: 1024px;
+  max-height: calc(80vh - 112px);
+  aspect-ratio: 16/9;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 10px;
+}
+
+.area-marker {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+}
+
+.area-marker.top-left {
+  top: -2px;
+  left: -2px;
+  border-right: none;
+  border-bottom: none;
+  border-top-left-radius: 5px;
+}
+
+.area-marker.top-right {
+  top: -2px;
+  right: -2px;
+  border-left: none;
+  border-bottom: none;
+  border-top-right-radius: 5px;
+}
+
+.area-marker.bottom-left {
+  bottom: -2px;
+  left: -2px;
+  border-right: none;
+  border-top: none;
+  border-bottom-left-radius: 5px;
+}
+
+.area-marker.bottom-right {
+  bottom: -2px;
+  right: -2px;
+  border-left: none;
+  border-top: none;
+  border-bottom-right-radius: 5px;
+}
+
+.human-silhouette {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: auto;
+  height: 90%;
+  aspect-ratio: 1/2;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.silhouette-head {
+  position: absolute;
+  top: 7%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 25%;
+  aspect-ratio: 1/1;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.8);
+}
+
+.silhouette-body {
+  position: absolute;
+  top: calc(20% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 40%;
+  border: 3px solid rgba(255, 255, 255, 0.8);
+  border-radius: 20px;
+}
+
+.silhouette-arm {
+  position: absolute;
+  top: 35%;
+  width: 70%;
+  height: 5%;
+  border: 3px solid rgba(255, 255, 255, 0.8);
+  border-radius: 10%/50%;
+}
+
+.silhouette-arm.left {
+  left: -25%;
+  transform: rotate(-60deg);
+}
+
+.silhouette-arm.right {
+  right: -25%;
+  transform: rotate(60deg);
+}
+
+.silhouette-leg {
+  position: absolute;
+  top: 65%;
+  width: 10%;
+  height: 40%;
+  border: 3px solid rgba(255, 255, 255, 0.8);
+  border-radius: 50%/7%;
+}
+
+.silhouette-leg.left {
+  left: 50%;
+  transform: translateX(-150%);
+}
+
+.silhouette-leg.right {
+  left: 50%;
+  transform: translateX(50%);
+} 

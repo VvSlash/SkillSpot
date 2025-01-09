@@ -14,33 +14,54 @@ import {
   SupportedModels,
 } from '@tensorflow-models/pose-detection';
 import '@tensorflow/tfjs-core';
-import '@tensorflow/tfjs-backend-webgl'; // Ensure WebGL backend is imported
+import '@tensorflow/tfjs-backend-webgl';
 import * as tf from '@tensorflow/tfjs';
+import { Keypoint } from '../components/CanvasRenderer';
 
-// Typ definiujący funkcję callback, która będzie przyjmować wykryte pozycje
-type PosesCallback = (poses: Pose[]) => void;
+// Typ definiujący funkcję callback, która będzie przyjmować przetworzone punkty kluczowe
+type KeypointsCallback = (keypoints: Keypoint[]) => void;
+
+// Mapowanie indeksów punktów kluczowych na ich nazwy i kolory
+const KEYPOINT_CONFIG = {
+  leftWrist: { index: 9, color: 'red' },
+  rightWrist: { index: 10, color: 'blue' },
+  leftAnkle: { index: 15, color: 'green' },
+  rightAnkle: { index: 16, color: 'yellow' },
+} as const;
 
 // Klasa PoseDetectionContainer
 export class PoseDetectionContainer {
-  private videoElement: HTMLVideoElement; // Element video, z którego będą pobierane dane do analizy
-  private detectorPromise!: Promise<PoseDetector>; // Obietnica utworzenia detektora pozycji
-  private rafId: number | null = null; // Identyfikator requestAnimationFrame
-  private inferenceTimeSum = 0; // Sumaryczny czas wnioskowania, używany do obliczania średniego czasu wnioskowania
-  private numInferences = 0; // Liczba wykonanych wnioskowań
-  private lastPanelUpdate = 0; // Czas ostatniej aktualizacji panelu
-  private callback: PosesCallback; // Funkcja callback do przetwarzania wykrytych pozycji
-  private isDetecting: boolean = false; // Flaga kontrolująca pętlę wykrywania
+  private videoElement: HTMLVideoElement;
+  private detector: PoseDetector | null = null;
+  private rafId: number | null = null;
+  private inferenceTimeSum = 0;
+  private numInferences = 0;
+  private lastPanelUpdate = 0;
+  private callback: KeypointsCallback;
+  private isDetecting: boolean = false;
 
-  constructor(video: HTMLVideoElement, callback: PosesCallback) {
+  constructor(video: HTMLVideoElement, callback: KeypointsCallback) {
     this.videoElement = video;
     this.callback = callback;
     this.initializeModel();
   }
 
+  // Mapowanie punktów kluczowych z modelu na format aplikacji
+  private mapKeypoints(poses: Pose[]): Keypoint[] {
+    if (!poses.length) return [];
+
+    const keypoints = poses[0].keypoints;
+    return Object.entries(KEYPOINT_CONFIG).map(([id, config]) => ({
+      id,
+      x: keypoints[config.index]?.x ?? null,
+      y: keypoints[config.index]?.y ?? null,
+      color: config.color,
+    }));
+  }
+
   // Inicjalizacja modelu MoveNet
   private async initializeModel() {
     try {
-      // Ustawienie backendu TensorFlow.js na WebGL i oczekiwanie na gotowość
       await tf.setBackend('webgl');
       await tf.ready();
 
@@ -53,31 +74,34 @@ export class PoseDetectionContainer {
       };
 
       console.log('Creating MoveNet detector...');
-      this.detectorPromise = createDetector(detectionModel, moveNetMultiConfig);
-
-      // Oczekiwanie na utworzenie detektora, zanim rozpocznie się wykrywanie
-      await this.detectorPromise;
-
-      this.startDetection();
+      this.detector = await createDetector(detectionModel, moveNetMultiConfig);
+      console.log('MoveNet detector created successfully');
     } catch (error) {
       console.error('Error initializing Pose Detection Model:', error);
+      this.detector = null;
     }
   }
 
   // Rozpoczęcie wykrywania pozycji
   public async startDetection() {
-    try {
-      const detector = await this.detectorPromise;
-      console.log('Pose Detector is ready.');
+    if (!this.detector) {
+      console.log('Waiting for detector initialization...');
+      await this.initializeModel();
+      if (!this.detector) {
+        console.error('Failed to initialize detector');
+        return;
+      }
+    }
 
+    try {
+      console.log('Starting pose detection...');
       this.isDetecting = true;
 
-      const poseInterval = 33; // Interwał wykrywania (w ms) - około 30 klatek na sekundę
+      const poseInterval = 33;
       let lastPoseTime = 0;
 
-      // Funkcja do wykrywania pozycji
       const detectPoses = async (timestamp: number) => {
-        if (!this.isDetecting) return;
+        if (!this.isDetecting || !this.detector) return;
 
         if (this.videoElement.readyState < 2) {
           await new Promise<void>((resolve) => {
@@ -87,19 +111,20 @@ export class PoseDetectionContainer {
           });
         }
 
-        // Przepuszczenie wykrywania co zadany interwał czasowy
         if (!lastPoseTime || timestamp - lastPoseTime >= poseInterval) {
           lastPoseTime = timestamp;
 
           const startInferenceTime = performance.now();
 
           try {
-            // Wykrywanie pozycji na podstawie obrazu z elementu video
-            const poses = await detector.estimatePoses(this.videoElement, {
+            const poses = await this.detector.estimatePoses(this.videoElement, {
               maxPoses: 4,
               flipHorizontal: false,
             });
-            this.callback(poses);
+            
+            // Mapowanie i przekazanie przetworzonych punktów kluczowych
+            const mappedKeypoints = this.mapKeypoints(poses);
+            this.callback(mappedKeypoints);
           } catch (error) {
             console.error('Error during pose detection:', error);
           }
@@ -108,24 +133,24 @@ export class PoseDetectionContainer {
           this.inferenceTimeSum += endInferenceTime - startInferenceTime;
           this.numInferences += 1;
 
-          // Aktualizacja panelu statystyk co 1000 ms
           const panelUpdateMilliseconds = 1000;
           if (endInferenceTime - this.lastPanelUpdate >= panelUpdateMilliseconds) {
             const averageInferenceTime = this.inferenceTimeSum / this.numInferences;
             this.inferenceTimeSum = 0;
             this.numInferences = 0;
-            // Możliwość zalogowania średniego czasu wnioskowania
-            // console.log(`Average Inference Time: ${averageInferenceTime.toFixed(2)}ms`);
             this.lastPanelUpdate = endInferenceTime;
           }
         }
 
-        this.rafId = requestAnimationFrame(detectPoses);
+        if (this.isDetecting) {
+          this.rafId = requestAnimationFrame(detectPoses);
+        }
       };
 
       this.rafId = requestAnimationFrame(detectPoses);
     } catch (error) {
       console.error('Error starting detection:', error);
+      this.isDetecting = false;
     }
   }
 
@@ -137,19 +162,14 @@ export class PoseDetectionContainer {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
-
-    // Stop the video stream
-    if (this.videoElement.srcObject) {
-      const stream = this.videoElement.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-    }
   }
 }
 
 /*
-  Podsumowanie:
-  - Klasa PoseDetectionContainer obsługuje wykrywanie pozycji użytkownika za pomocą modelu MoveNet.
-  - Inicjalizuje model, ustawia backend na WebGL, rozpoczyna pętlę wykrywania i przekazuje wykryte pozycje do callbacku.
-  - Funkcja startDetection odpowiada za uruchomienie wykrywania w pętli, a stopDetection za zatrzymanie.
-  - Klasa zarządza średnim czasem wnioskowania, co umożliwia monitorowanie wydajności modelu.
+  Podsumowanie zmian:
+  - Dodano mapowanie punktów kluczowych z modelu na format aplikacji
+  - Zdefiniowano stałą KEYPOINT_CONFIG z konfiguracją punktów kluczowych
+  - Zmieniono typ callback na KeypointsCallback przyjmujący przetworzone punkty
+  - Dodano metodę mapKeypoints do przetwarzania surowych danych z modelu
+  - Zmodyfikowano logikę wykrywania, aby używała nowego mapowania
 */
